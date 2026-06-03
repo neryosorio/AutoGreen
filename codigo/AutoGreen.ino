@@ -12,7 +12,7 @@
 // --- Pines sensores ---
 #define PIN_DHT    2
 #define PIN_SUELO  A0
-#define PIN_LDR    A2
+#define PIN_LDR    A3
 #define TIPO_DHT   DHT22
 
 // --- Pines actuadores ---
@@ -22,16 +22,17 @@
 #define PIN_LUZ         11
 
 // --- Umbrales de control (segun requerimientos del proyecto) ---
-#define TEMP_MAX       30.0   // Activar ventilador si temp > 30C
-#define TEMP_MIN       15.0   // Activar calefactor si temp < 15C
-#define HUMEDAD_MIN    40     // Activar bomba si humedad suelo < 40%
-#define HUMEDAD_MAX    60     // Apagar bomba si humedad suelo > 60% (histeresis)
-#define LUZ_MIN        200    // Activar luz auxiliar si lux < 200
+#define TEMP_MAX       30.0
+#define TEMP_MIN       15.0
+#define HUMEDAD_MIN    40
+#define HUMEDAD_MAX    60
+#define LUZ_ENCENDER   50
+#define LUZ_APAGAR     400
 
 // --- Sensor DHT22 ---
 DHT dht(PIN_DHT, TIPO_DHT);
 
-// --- LCD I2C direccion 0x27, 16 columnas, 2 filas ---
+// --- LCD I2C direccion 0x27 ---
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // --- Variables globales ---
@@ -41,13 +42,10 @@ int   humedad_suelo;
 float luz_lux;
 
 // ============================================================
-// SETUP: se ejecuta una sola vez al iniciar
-// ============================================================
 void setup() {
   Serial.begin(9600);
   dht.begin();
 
-  // Inicializar LCD
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
@@ -57,42 +55,29 @@ void setup() {
   delay(2000);
   lcd.clear();
 
-  // Configurar pines actuadores como salida
   pinMode(PIN_VENTILADOR, OUTPUT);
   pinMode(PIN_BOMBA,      OUTPUT);
   pinMode(PIN_CALEFACTOR, OUTPUT);
   pinMode(PIN_LUZ,        OUTPUT);
 
-  // Reles Low Trigger: HIGH = apagado al inicio
   digitalWrite(PIN_VENTILADOR, HIGH);
   digitalWrite(PIN_BOMBA,      HIGH);
   digitalWrite(PIN_LUZ,        HIGH);
-  // LED directo: LOW = apagado al inicio
   digitalWrite(PIN_CALEFACTOR, LOW);
 
   Serial.println("=== AutoGreen iniciando... ===");
 }
 
 // ============================================================
-// LOOP: se ejecuta continuamente
-// ============================================================
 void loop() {
-  // Apagar bomba y ventilador momentaneamente para lectura limpia
-  // Evita ruido electrico en sensores analogicos
-  digitalWrite(PIN_VENTILADOR, HIGH);
-  digitalWrite(PIN_BOMBA,      HIGH);
-
-  delay(200); // Espera que el ruido se disipe
-
+  delay(200);
   leerSensores();
   controlAutomatico();
   mostrarLCD();
   mostrarSerial();
-  delay(1000);
+  delay(500);
 }
 
-// ============================================================
-// Lee los 3 sensores y guarda valores en variables globales
 // ============================================================
 void leerSensores() {
   // DHT22: temperatura y humedad ambiente
@@ -105,56 +90,51 @@ void leerSensores() {
     humedad_ambiente = 0;
   }
 
-  // Sensor capacitivo de suelo: promedio de 50 lecturas para estabilizar
+  // Sensor capacitivo suelo: promedio 20 lecturas
   // Tierra seca = RAW ~1014 = 0%, Agua = RAW ~242 = 100%
   long suma = 0;
-  for (int i = 0; i < 50; i++) {
+  for (int i = 0; i < 20; i++) {
     suma += analogRead(PIN_SUELO);
-    delay(5);
+    delay(2);
   }
-  int raw_suelo = suma / 50;
+  int raw_suelo = suma / 20;
   humedad_suelo = map(raw_suelo, 1014, 242, 0, 100);
   humedad_suelo = constrain(humedad_suelo, 0, 100);
 
-  // LDR: promedio de 10 lecturas para estabilizar
-  // Calibrado: oscuridad = RAW ~1014 = 0 lux, luz normal = RAW ~610 = 10000 lux
+  // LDR: promedio 5 lecturas
   int sumaLDR = 0;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 5; i++) {
     sumaLDR += analogRead(PIN_LDR);
-    delay(5);
+    delay(2);
   }
-  int raw_ldr = sumaLDR / 10;
+  int raw_ldr = sumaLDR / 5;
   luz_lux = map(raw_ldr, 1014, 610, 0, 10000);
   luz_lux = constrain(luz_lux, 0, 10000);
 }
 
 // ============================================================
-// Logica de control automatico de actuadores
-// Reles: Low Trigger (LOW = activado, HIGH = apagado)
-// LED calefactor: logica directa (HIGH = activado, LOW = apagado)
-// ============================================================
 void controlAutomatico() {
   // Ventilador: ON si temperatura > 30C
   digitalWrite(PIN_VENTILADOR, temperatura > TEMP_MAX ? LOW : HIGH);
 
-  // Bomba: ON si humedad suelo < 40%, OFF si > 60% (histeresis)
+  // Bomba: histeresis ON < 40%, OFF > 60%
   if (humedad_suelo < HUMEDAD_MIN) {
-    digitalWrite(PIN_BOMBA, LOW);   // Encender bomba
+    digitalWrite(PIN_BOMBA, LOW);
   } else if (humedad_suelo > HUMEDAD_MAX) {
-    digitalWrite(PIN_BOMBA, HIGH);  // Apagar bomba
+    digitalWrite(PIN_BOMBA, HIGH);
   }
 
-  // Calefactor: ON si temperatura < 15C (LED directo, no rele)
+  // Calefactor: ON si temperatura < 15C
   digitalWrite(PIN_CALEFACTOR, temperatura < TEMP_MIN ? HIGH : LOW);
 
-  // Luz auxiliar: ON si luminosidad < 200 lux
-  digitalWrite(PIN_LUZ, luz_lux < LUZ_MIN ? LOW : HIGH);
+  // Luz auxiliar: histeresis ON < 50 lux, OFF > 400 lux
+  if (luz_lux < LUZ_ENCENDER) {
+    digitalWrite(PIN_LUZ, LOW);
+  } else if (luz_lux > LUZ_APAGAR) {
+    digitalWrite(PIN_LUZ, HIGH);
+  }
 }
 
-// ============================================================
-// Muestra valores en pantalla LCD 16x2
-// Fila 0: T:XX.XC H:XX%
-// Fila 1: S:XX%  L:XXXX
 // ============================================================
 void mostrarLCD() {
   lcd.setCursor(0, 0);
@@ -173,8 +153,6 @@ void mostrarLCD() {
 }
 
 // ============================================================
-// Muestra valores y estado de actuadores en Serial Monitor
-// ============================================================
 void mostrarSerial() {
   Serial.println("-----------------------------");
   Serial.print("Temperatura:      "); Serial.print(temperatura); Serial.println(" C");
@@ -185,6 +163,6 @@ void mostrarSerial() {
   Serial.print("Ventilador: "); Serial.println(temperatura > TEMP_MAX ? "ON" : "OFF");
   Serial.print("Bomba:      "); Serial.println(humedad_suelo < HUMEDAD_MIN ? "ON" : "OFF");
   Serial.print("Calefactor: "); Serial.println(temperatura < TEMP_MIN ? "ON" : "OFF");
-  Serial.print("Luz:        "); Serial.println(luz_lux < LUZ_MIN ? "ON" : "OFF");
+  Serial.print("Luz:        "); Serial.println(luz_lux < LUZ_ENCENDER ? "ON" : "OFF");
   Serial.println("-----------------------------");
 }
